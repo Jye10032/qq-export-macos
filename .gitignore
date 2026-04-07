@@ -1,0 +1,11 @@
+# macOS
+.DS_Store
+
+# Debug logs
+*.log
+
+# Export data
+qq-export-data/
+
+# Node
+node_modules/
