@@ -213,15 +213,36 @@ async function startExportServer(session) {
                     sourcePath: el.pttElement.filePath, localFile: null
                 });
             } else if (el.faceElement) {
-                parts.push({ type: 'emoji', faceId: el.faceElement.faceIndex || el.faceElement.faceType });
+                const faceId = el.faceElement.faceIndex ?? el.faceElement.faceType ?? 0;
+                const faceText = el.faceElement.faceText || '';
+                parts.push({ type: 'emoji', faceId, faceText });
             } else if (el.replyElement) {
                 parts.push({ type: 'reply', replyMsgSeq: el.replyElement.replayMsgSeq || el.replyElement.replyMsgSeq });
             } else if (el.arkElement) {
-                let content = el.arkElement.bytesData || '';
-                try { content = JSON.parse(content); } catch(e) {}
-                parts.push({ type: 'card', content });
+                let raw = el.arkElement.bytesData || '';
+                let parsed = null;
+                try { parsed = JSON.parse(raw); } catch(e) {}
+                // 提取卡片信息
+                let title = '', desc = '', url = '', preview = '';
+                if (parsed) {
+                    const meta = parsed.meta || {};
+                    const d1 = meta.detail_1 || meta.news || meta.detail || {};
+                    title = parsed.prompt || d1.title || '';
+                    desc = d1.desc || '';
+                    url = d1.qqdocurl || d1.url || d1.jumpUrl || '';
+                    preview = d1.preview || '';
+                }
+                parts.push({ type: 'card', title, desc, url, preview, raw: parsed || raw });
             } else if (el.marketFaceElement) {
-                parts.push({ type: 'sticker', name: el.marketFaceElement.faceName || el.marketFaceElement.emojiId || '' });
+                const emojiId = el.marketFaceElement.emojiId || '';
+                const name = el.marketFaceElement.faceName || '';
+                // 构造 GIF URL
+                let imgUrl = '';
+                if (emojiId) {
+                    const dir = emojiId.substring(0, 2);
+                    imgUrl = `https://gxh.vip.qq.com/club/item/parcel/item/${dir}/${emojiId}/raw300.gif`;
+                }
+                parts.push({ type: 'sticker', name, emojiId, imgUrl });
             } else if (el.fileElement) {
                 parts.push({
                     type: 'file', fileName: el.fileElement.fileName,
@@ -240,11 +261,11 @@ async function startExportServer(session) {
                 case 'text': return p.content;
                 case 'image': return p.localFile ? `[图片: ${p.localFile}]` : '[图片]';
                 case 'video': return p.localFile ? `[视频: ${p.localFile}]` : '[视频]';
-                case 'audio': return p.localFile ? `[语音: ${p.localFile}]` : '[语音]';
-                case 'emoji': return '[表情]';
+                case 'audio': return p.localFile ? `[语音: ${p.localFile}]` : `[语音 ${p.duration || '?'}s]`;
+                case 'emoji': return p.faceText || `[表情${p.faceId}]`;
                 case 'reply': return '';
-                case 'card': return '[卡片消息]';
-                case 'sticker': return `[${p.name || '商城表情'}]`;
+                case 'card': return p.title ? `[卡片: ${p.title}]` : '[卡片消息]';
+                case 'sticker': return `[${p.name || '表情'}]`;
                 case 'file': return `[文件: ${p.fileName || ''}]`;
                 case 'system': return '[系统提示]';
                 default: return '';
@@ -372,15 +393,29 @@ async function startExportServer(session) {
                     return '<span class="tag">[图片]</span>';
                 case 'video':
                     if (p.localFile) return `<video src="${mediaPrefix}${escHtml(p.localFile)}" controls style="max-width:300px;border-radius:4px"></video>`;
-                    return '<span class="tag">[视频]</span>';
+                    return `<span class="tag">[视频${p.duration ? ' ' + p.duration + 's' : ''}]</span>`;
                 case 'audio':
                     if (p.localFile) return `<audio src="${mediaPrefix}${escHtml(p.localFile)}" controls></audio>`;
-                    return '<span class="tag">[语音]</span>';
-                case 'emoji': return '<span class="tag">[表情]</span>';
+                    return `<span class="tag voice">&#9835; 语音 ${p.duration || '?'}s</span>`;
+                case 'emoji':
+                    return `<img src="https://qq-face.vercel.app/gif/s${p.faceId}.gif" alt="${escHtml(p.faceText || '表情')}" title="${escHtml(p.faceText || '表情' + p.faceId)}" class="face" onerror="this.outerHTML='<span class=\\'tag\\'>${escHtml(p.faceText || '[表情]')}</span>'">`;
                 case 'reply': return '';
-                case 'card': return '<span class="tag">[卡片消息]</span>';
-                case 'sticker': return `<span class="tag">[${escHtml(p.name || '商城表情')}]</span>`;
-                case 'file': return `<span class="tag">[文件: ${escHtml(p.fileName || '')}]</span>`;
+                case 'card': {
+                    let html = '<div class="card">';
+                    if (p.preview) html += `<img src="${escHtml(p.preview)}" class="card-img" loading="lazy" onerror="this.style.display='none'">`;
+                    html += `<div class="card-body">`;
+                    if (p.url) html += `<a href="${escHtml(p.url)}" target="_blank" class="card-title">${escHtml(p.title || '卡片消息')}</a>`;
+                    else html += `<div class="card-title">${escHtml(p.title || '卡片消息')}</div>`;
+                    if (p.desc) html += `<div class="card-desc">${escHtml(p.desc)}</div>`;
+                    html += '</div></div>';
+                    return html;
+                }
+                case 'sticker':
+                    if (p.imgUrl) return `<img src="${escHtml(p.imgUrl)}" alt="${escHtml(p.name || '表情')}" title="${escHtml(p.name || '表情')}" class="sticker" loading="lazy" onerror="this.outerHTML='<span class=\\'tag\\'>[${escHtml(p.name || '表情')}]</span>'">`;
+                    return `<span class="tag">[${escHtml(p.name || '表情')}]</span>`;
+                case 'file':
+                    if (p.localFile) return `<a href="${mediaPrefix}${escHtml(p.localFile)}" class="file-link">&#128196; ${escHtml(p.fileName || '文件')}</a>`;
+                    return `<span class="tag">&#128196; ${escHtml(p.fileName || '文件')}</span>`;
                 case 'system': return `<div class="sys">${escHtml(typeof p.content === 'string' ? p.content : '[系统提示]')}</div>`;
                 default: return '';
             }
@@ -407,25 +442,39 @@ async function startExportServer(session) {
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f0f0f0;padding:20px}
-.header{text-align:center;padding:20px;background:#fff;border-radius:12px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.header{text-align:center;padding:20px;background:#fff;border-radius:12px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,.06);max-width:800px;margin-left:auto;margin-right:auto}
 .header h1{font-size:18px;color:#333;margin-bottom:8px}
 .header .meta{font-size:13px;color:#999}
 .chat{max-width:800px;margin:0 auto}
 .date-sep{text-align:center;margin:16px 0;font-size:12px;color:#999}
 .date-sep span{background:#e8e8e8;padding:2px 12px;border-radius:10px}
-.msg{display:flex;margin:6px 0;align-items:flex-start}
+.msg{display:flex;margin:8px 0;gap:8px}
 .msg.self{flex-direction:row-reverse}
-.bubble{max-width:65%;padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.5;word-break:break-word;position:relative}
+.msg-inner{max-width:65%;display:flex;flex-direction:column}
+.msg.self .msg-inner{align-items:flex-end}
+.nick{font-size:11px;color:#999;margin-bottom:3px;padding:0 6px}
+.bubble{padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.6;word-break:break-word}
 .msg:not(.self) .bubble{background:#fff;border-top-left-radius:4px}
 .msg.self .bubble{background:#95ec69;border-top-right-radius:4px}
-.nick{font-size:11px;color:#999;margin-bottom:2px;padding:0 4px}
-.msg.self .nick{text-align:right}
-.time{font-size:10px;color:#bbb;margin-top:2px;padding:0 4px}
+.time{font-size:10px;color:#bbb;margin-top:3px;padding:0 6px}
 .msg.self .time{text-align:right}
-.tag{background:#f0f0f0;color:#888;padding:1px 6px;border-radius:4px;font-size:12px}
-.sys{text-align:center;font-size:12px;color:#999;margin:8px 0}
-img{display:block;margin:4px 0}
+.tag{background:rgba(0,0,0,.06);color:#888;padding:2px 8px;border-radius:4px;font-size:12px;display:inline-block}
+.voice{background:#e8f5e9;color:#4caf50}
+.sys{text-align:center;font-size:12px;color:#999;margin:10px 0;padding:4px 0}
+.face{width:24px;height:24px;vertical-align:middle;display:inline}
+.sticker{max-width:120px;max-height:120px;display:block;margin:4px 0}
+img:not(.face):not(.sticker):not(.card-img){display:block;margin:4px 0;max-width:300px;max-height:300px;border-radius:4px;cursor:pointer}
 video,audio{display:block;margin:4px 0}
+video{max-width:300px;border-radius:4px}
+.card{border:1px solid #e8e8e8;border-radius:8px;overflow:hidden;margin:4px 0;max-width:280px;background:#fafafa}
+.card-img{width:100%;max-height:150px;object-fit:cover;display:block}
+.card-body{padding:8px 10px}
+.card-title{font-size:13px;color:#333;font-weight:500;text-decoration:none;display:block;margin-bottom:2px}
+a.card-title{color:#4a90d9}
+a.card-title:hover{text-decoration:underline}
+.card-desc{font-size:11px;color:#999;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-link{display:inline-block;padding:6px 10px;background:#f5f5f5;border-radius:6px;color:#333;text-decoration:none;font-size:13px}
+.file-link:hover{background:#e8e8e8}
 </style></head><body>
 <div class="header"><h1>${escHtml(peerInfo.nick)} (${escHtml(peerInfo.uin)})</h1>
 <div class="meta">消息总数: ${msgs.length} | 导出时间: ${dateStr}</div></div>
@@ -451,7 +500,7 @@ video,audio{display:block;margin:4px 0}
                 if (!content) continue;
 
                 html += `<div class="msg${isSelf ? ' self' : ''}">`;
-                html += `<div><div class="nick">${escHtml(sender)}</div>`;
+                html += `<div class="msg-inner"><div class="nick">${escHtml(sender)}</div>`;
                 html += `<div class="bubble">${content}</div>`;
                 html += `<div class="time">${escHtml(timeStr.slice(11))}</div></div></div>\n`;
             }
