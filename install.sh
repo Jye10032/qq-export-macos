@@ -33,15 +33,45 @@ if [ ! -d "$LLQQNT_DIR" ]; then
     exit 1
 fi
 
+# 检测 LiteLoaderQQNT 本体关键文件
+LL_ENTRY="$LLQQNT_DIR/src/main.js"
+if [ ! -f "$LL_ENTRY" ]; then
+    echo "错误: 检测到 LiteLoaderQQNT 目录，但缺少入口文件:"
+    echo "  $LL_ENTRY"
+    echo "请重新安装 LiteLoaderQQNT 本体后再运行此脚本。"
+    exit 1
+fi
+
 echo "LiteLoaderQQNT: 已安装"
 
-# 备份原始 LiteLoader.js
+# 关键路径
 LOADER_PATH="$QQ_APP/Contents/Resources/app/app_launcher/LiteLoader.js"
 BACKUP_PATH="${LOADER_PATH}.bak"
+PKG_BACKUP_PATH="${PKG_JSON}.bak"
+EXPECTED_MAIN="./app_launcher/LiteLoader.js"
+
+# 当前 package.json main
+CURRENT_MAIN="$(node -e "const fs=require('fs');const pkg=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(pkg.main||'')" "$PKG_JSON")"
+
+if [ "$CURRENT_MAIN" = "$EXPECTED_MAIN" ]; then
+    echo "LiteLoaderQQNT 注入状态: 已安装到 QQ.app"
+else
+    echo "LiteLoaderQQNT 注入状态: 未安装到 QQ.app"
+    echo "  当前 main: ${CURRENT_MAIN:-<empty>}"
+    echo "  目标 main: $EXPECTED_MAIN"
+fi
+
+# 备份原始 LiteLoader.js 和 package.json
+sudo mkdir -p "$(dirname "$LOADER_PATH")"
 
 if [ -f "$LOADER_PATH" ] && [ ! -f "$BACKUP_PATH" ]; then
     echo "备份原始 LiteLoader.js → LiteLoader.js.bak"
     sudo cp "$LOADER_PATH" "$BACKUP_PATH"
+fi
+
+if [ -f "$PKG_JSON" ] && [ ! -f "$PKG_BACKUP_PATH" ]; then
+    echo "备份原始 package.json → package.json.bak"
+    sudo cp "$PKG_JSON" "$PKG_BACKUP_PATH"
 fi
 
 # 部署 LiteLoader.js
@@ -49,24 +79,49 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "部署 LiteLoader.js..."
 sudo cp "$SCRIPT_DIR/LiteLoader.js" "$LOADER_PATH"
 
-# 去掉 QQ 签名（解除沙盒限制）
-echo "重签 QQ.app（去除沙盒限制）..."
-cat > /tmp/qq-nosandbox.plist << 'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-</dict>
-</plist>
-PLIST
-sudo codesign --force --deep --sign - --entitlements /tmp/qq-nosandbox.plist "$QQ_APP" 2>/dev/null || true
-rm -f /tmp/qq-nosandbox.plist
+# 修改 QQ 启动入口到 LiteLoader.js
+if [ "$CURRENT_MAIN" != "$EXPECTED_MAIN" ]; then
+    echo "写入 LiteLoaderQQNT 启动入口到 package.json..."
+    TMP_PKG="/tmp/qq-package.$$.json"
+    node -e "
+const fs = require('fs');
+const pkgPath = process.argv[1];
+const outPath = process.argv[2];
+const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+pkg.main = './app_launcher/LiteLoader.js';
+fs.writeFileSync(outPath, JSON.stringify(pkg, null, 2) + '\n');
+" "$PKG_JSON" "$TMP_PKG"
+    sudo cp "$TMP_PKG" "$PKG_JSON"
+    rm -f "$TMP_PKG"
+fi
+
+# 检查最终安装状态
+FINAL_MAIN="$(node -e "const fs=require('fs');const pkg=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.stdout.write(pkg.main||'')" "$PKG_JSON")"
+if [ "$FINAL_MAIN" != "$EXPECTED_MAIN" ]; then
+    echo "错误: package.json main 修改失败，当前值为: ${FINAL_MAIN:-<empty>}"
+    exit 1
+fi
 
 # 创建数据目录
 DATA_DIR="$HOME/Library/Application Support/QQ/qq-export-data"
 mkdir -p "$DATA_DIR"
+
+echo ""
+echo "安装后自检:"
+echo "  - package.json main: $FINAL_MAIN"
+
+if lsof -nP -iTCP:12333 -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "  - 端口 12333: 已监听"
+    SELF_CHECK_URL="http://127.0.0.1:12333/"
+    if curl -fsS --max-time 2 "$SELF_CHECK_URL" >/dev/null 2>&1; then
+        echo "  - HTTP 服务: 正常"
+    else
+        echo "  - HTTP 服务: 端口已监听，但首页请求失败"
+    fi
+else
+    echo "  - 端口 12333: 未监听"
+    echo "  - 说明: 这通常是因为 QQ 还未完全重启，或 LiteLoaderQQNT 尚未在本次启动中加载"
+fi
 
 echo ""
 echo "===== 安装完成 ====="
@@ -77,4 +132,5 @@ echo "  2. 打开浏览器访问 http://127.0.0.1:12333"
 echo "  3. 输入QQ号 → 查询 → 导出"
 echo ""
 echo "导出文件保存在: $DATA_DIR"
+echo "LiteLoaderQQNT 已接入 QQ.app: $FINAL_MAIN"
 echo ""
