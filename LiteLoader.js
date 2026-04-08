@@ -427,6 +427,13 @@ async function startExportServer(session) {
         const exportDir = path.join(dataDir, peerInfo.uin);
         fs.mkdirSync(exportDir, { recursive: true });
 
+        // 兜底：如果 selfUin 为空，从消息中推断（私聊中不是对方的就是自己）
+        if (!selfUin && msgs.length > 0) {
+            const peerUin = peerInfo.uin;
+            const other = msgs.find(m => m.senderUin && String(m.senderUin) !== String(peerUin));
+            if (other) { selfUin = String(other.senderUin); log(`selfUin inferred: ${selfUin}`); }
+        }
+
         if (withMedia) {
             const mediaDir = path.join(exportDir, 'media');
             await downloadAllMedia(msgs, mediaDir, (d, t) => log(`[HTML] Media ${d}/${t}`));
@@ -494,7 +501,7 @@ a.card-title:hover{text-decoration:underline}
                     lastDate = dateOnly;
                 }
                 const sender = msg.sendNickName || msg.sendMemberName || msg.senderUin || '未知';
-                const isSelf = msg.senderUin === selfUin;
+                const isSelf = selfUin && (String(msg.senderUin) === String(selfUin));
                 const parts = withMedia ? enrichParts(msg.elements) : parseElementsRich(msg.elements);
                 const content = partsToHtml(parts, mediaPrefix);
                 if (!content) continue;
@@ -516,9 +523,31 @@ a.card-title:hover{text-decoration:underline}
     // 获取自己的 QQ 号（用于 HTML 中区分左右气泡）
     let selfUin = '';
     try {
-        const loginSvc = session.getLoginService?.() || session.getLoginService?.call(session);
-        if (loginSvc?.getLoginInfo) { selfUin = loginSvc.getLoginInfo()?.uin || ''; }
+        // 方式1: getLoginService
+        const loginSvc = session.getLoginService?.();
+        if (loginSvc?.getLoginInfo) {
+            const info = loginSvc.getLoginInfo();
+            selfUin = info?.uin || info?.account || '';
+        }
     } catch(e) {}
+    if (!selfUin) {
+        try {
+            // 方式2: getProfileService 获取自己的信息
+            const profileSvc = session.getProfileService?.();
+            if (profileSvc?.getLocalSelfInfo) {
+                const self = profileSvc.getLocalSelfInfo();
+                selfUin = self?.uin || '';
+            }
+        } catch(e) {}
+    }
+    if (!selfUin) {
+        try {
+            // 方式3: getMsgService 的 getSelfUin
+            const msgSvc = session.getMsgService();
+            if (msgSvc?.getSelfUin) selfUin = msgSvc.getSelfUin() || '';
+        } catch(e) {}
+    }
+    log(`selfUin: ${selfUin || '(empty - self messages will not be right-aligned)'}`);
 
     const HTML = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>QQ聊天记录导出</title>
