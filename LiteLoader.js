@@ -546,8 +546,8 @@ button:disabled{opacity:.5;cursor:not-allowed}
 <div><button class="btn-query" onclick="query()">查询</button></div>
 <div class="info" id="info"></div>
 <div class="row">
-<select id="fmt"><option value="txt">TXT 纯文本</option><option value="html" selected>HTML 网页</option><option value="json">JSON 数据</option></select>
-<label><input type="checkbox" id="media"> 下载媒体文件</label>
+<select id="fmt" onchange="onFmtChange()"><option value="txt">TXT 纯文本</option><option value="html" selected>HTML 网页</option><option value="json">JSON 数据</option></select>
+<label><input type="checkbox" id="media" checked> 下载媒体文件</label>
 <button class="btn-export" id="btnExport" disabled onclick="doExport()">导出</button>
 </div>
 <div class="status" id="status"></div>
@@ -555,6 +555,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 </div>
 <script>
 let currentUin='';
+function onFmtChange(){document.getElementById('media').checked=document.getElementById('fmt').value==='html'}
 async function query(){
   const uin=document.getElementById('uin').value.trim();
   if(!uin){alert('请输入QQ号');return}
